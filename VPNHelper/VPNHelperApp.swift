@@ -2,7 +2,7 @@
 //  VPNHelperApp.swift
 //  VPNHelper
 //
-//  Created by Dionysis Kalepanagos on 14/3/26.
+//  Created by Dionysis Kalepanagos on 15/3/26.
 //
 
 import SwiftUI
@@ -11,7 +11,8 @@ import SwiftUI
 struct VPNHelperApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(viewModel: VPNViewModel(service: VPNService()))
         }
+        .windowResizability(.contentSize)
     }
 }
