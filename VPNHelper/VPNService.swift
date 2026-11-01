@@ -21,7 +21,8 @@ final class VPNService: VPNServiceProtocol {
     private let pgrepPath = "/usr/bin/pgrep"
     private let openconnectPath = "/opt/homebrew/bin/openconnect"
     private let vpnSlicePath = "/opt/homebrew/bin/vpn-slice"
-    private let askpassScriptPath = "/tmp/vpnhelper-askpass.sh"
+    private let askpassScriptPath = FileManager.default.temporaryDirectory
+        .appendingPathComponent("vpnhelper-askpass-\(UUID().uuidString).sh").path
     private let pidFilePath = "/tmp/vpnhelper-openconnect.pid"
 
     private let queue = DispatchQueue(label: "VPNService.PTYQueue")
@@ -287,6 +288,11 @@ final class VPNService: VPNServiceProtocol {
     }
 
     func disconnect() async throws {
+        if sessionMode == .authenticating, let process {
+            disconnectRequested = true
+            process.terminate()
+            return
+        }
         disconnectRequested = true
         emitLog("Disconnect requested. Looking up real openconnect PID...")
 
@@ -453,16 +459,13 @@ final class VPNService: VPNServiceProtocol {
     }
 
     private func ensureAskpassScript() async throws {
-        let script = """
-        #!/bin/sh
-        exec /usr/bin/osascript <<'APPLESCRIPT'
-        tell application "System Events"
-            activate
-            set userInput to text returned of (display dialog "VPN Helper needs administrator privileges." default answer "" with hidden answer buttons {"Cancel", "OK"} default button "OK")
-        end tell
-        return userInput
-        APPLESCRIPT
-        """
+        guard let executableURL = Bundle.main.executableURL else {
+            throw NSError(domain: "VPNService", code: 910, userInfo: [
+                NSLocalizedDescriptionKey: "Could not locate the administrator password prompt."
+            ])
+        }
+
+        let script = NativeAdminPrompt.askpassScript(executablePath: executableURL.path)
 
         if !FileManager.default.fileExists(atPath: askpassScriptPath) {
             try script.write(toFile: askpassScriptPath, atomically: true, encoding: .utf8)
@@ -674,6 +677,8 @@ final class VPNService: VPNServiceProtocol {
             "< 0010:"
         ]
 
+        if line.contains("COOKIE=") || line.contains("Set-Cookie:") { return false }
+        if !savedPassword.isEmpty && line.contains(savedPassword) { return false }
         return !suppressedPrefixes.contains { line.hasPrefix($0) }
     }
 
@@ -687,6 +692,7 @@ final class VPNService: VPNServiceProtocol {
 
         let finishedMode = sessionMode
         let outputSnapshot = fullOutput
+        let passwordSnapshot = savedPassword
         let pendingDisconnectContinuation = disconnectContinuation
         let wasDisconnectRequested = disconnectRequested
 
@@ -722,7 +728,7 @@ final class VPNService: VPNServiceProtocol {
                     emitError(error.localizedDescription)
                 }
             } else {
-                emitError(buildFailureMessage(exitCode: status, output: outputSnapshot))
+                emitError(buildFailureMessage(exitCode: status, output: Self.redactedOutput(outputSnapshot, password: passwordSnapshot)))
             }
 
         case .tunnel:
@@ -732,12 +738,12 @@ final class VPNService: VPNServiceProtocol {
                     self?.onDisconnected?()
                 }
             } else {
-                emitError(buildFailureMessage(exitCode: status, output: outputSnapshot))
+                emitError(buildFailureMessage(exitCode: status, output: Self.redactedOutput(outputSnapshot, password: passwordSnapshot)))
             }
 
         case .none:
             if status != 0 {
-                emitError(buildFailureMessage(exitCode: status, output: outputSnapshot))
+                emitError(buildFailureMessage(exitCode: status, output: Self.redactedOutput(outputSnapshot, password: passwordSnapshot)))
             }
         }
     }
@@ -869,6 +875,14 @@ final class VPNService: VPNServiceProtocol {
         }
 
         return result
+    }
+
+    private static func redactedOutput(_ output: String, password: String) -> String {
+        var result = output
+        if !password.isEmpty { result = result.replacingOccurrences(of: password, with: "[redacted]") }
+        return result.components(separatedBy: .newlines).filter {
+            !$0.localizedCaseInsensitiveContains("cookie")
+        }.joined(separator: "\n")
     }
 
     private func emitLog(_ message: String) {

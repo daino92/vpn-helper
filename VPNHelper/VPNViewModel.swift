@@ -25,11 +25,17 @@ final class VPNViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var authSession: VPNAuthSession?
 
+    @Published var rememberCredentials = false
+    private var didLoadCredentials = false
+    private let credentialStore: any CredentialStore
     private let service: VPNServiceProtocol
 
     let emailDomain = "@groupnet.gr"
 
-    init(service: VPNServiceProtocol) {
+    init(service: VPNServiceProtocol, credentialStore: (any CredentialStore)? = nil, userDefaults: UserDefaults = .standard) {
+        _savedEmailPrefix = AppStorage(wrappedValue: "", "savedEmailPrefix", store: userDefaults)
+        _rememberEmailPrefix = AppStorage(wrappedValue: false, "rememberEmailPrefix", store: userDefaults)
+        self.credentialStore = credentialStore ?? KeychainCredentialStore()
         self.service = service
         bindServiceCallbacks()
     }
@@ -43,14 +49,12 @@ final class VPNViewModel: ObservableObject {
     var canStartLogin: Bool {
         !emailPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !vpnPassword.isEmpty &&
-        adminAccessState == .unlocked &&
         !isBusy &&
         (connectionState == .disconnected || connectionState == .error)
     }
 
     var canSubmitOTP: Bool {
-        otp.count == 6 &&
-        adminAccessState == .unlocked &&
+        otp.count == 6 && otp.allSatisfy { $0.isASCII && $0.isNumber } &&
         !isBusy &&
         connectionState == .awaitingOTP
     }
@@ -66,13 +70,42 @@ final class VPNViewModel: ObservableObject {
     }
 
     var canFixNetwork: Bool {
-        adminAccessState == .unlocked && !isBusy
+        !isBusy
     }
 
     func onAppear() {
-        if rememberEmailPrefix {
-            emailPrefix = savedEmailPrefix
+        guard !didLoadCredentials else { return }
+        didLoadCredentials = true
+        if rememberEmailPrefix { emailPrefix = savedEmailPrefix }
+        do {
+            if let credentials = try credentialStore.load() {
+                emailPrefix = credentials.emailPrefix
+                vpnPassword = credentials.password
+                rememberCredentials = true
+            }
+        } catch {
+            errorMessage = "Could not read saved login: \(error.localizedDescription)"
         }
+    }
+
+    func setRememberCredentials(_ enabled: Bool) {
+        do {
+            if enabled {
+                try saveCredentials()
+            } else {
+                try credentialStore.delete()
+            }
+            rememberCredentials = enabled
+        } catch {
+            errorMessage = "Could not update saved login: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveCredentials() throws {
+        try credentialStore.save(SavedCredentials(
+            emailPrefix: emailPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
+            password: vpnPassword
+        ))
     }
 
     func toggleRememberEmail(_ enabled: Bool) {
@@ -91,7 +124,7 @@ final class VPNViewModel: ObservableObject {
     }
 
     func sanitizeOTPInput() {
-        let digitsOnly = otp.filter(\.isNumber)
+        let digitsOnly = otp.filter { $0.isASCII && $0.isNumber }
         let limited = String(digitsOnly.prefix(6))
 
         if otp != limited {
@@ -119,6 +152,15 @@ final class VPNViewModel: ObservableObject {
     }
 
     func startLogin() async {
+        guard canStartLogin else { return }
+        if rememberCredentials {
+            do {
+                try saveCredentials()
+            } catch {
+                errorMessage = "Could not save login: \(error.localizedDescription)"
+                return
+            }
+        }
         errorMessage = nil
         authSession = nil
         otp = ""
@@ -140,6 +182,7 @@ final class VPNViewModel: ObservableObject {
     }
 
     func submitOTP() async {
+        guard canSubmitOTP else { return }
         errorMessage = nil
         isBusy = true
         addLog("Submitting OTP and waiting for authenticated session...")
@@ -147,7 +190,9 @@ final class VPNViewModel: ObservableObject {
         do {
             try await service.submitOTP(otp.trimmingCharacters(in: .whitespacesAndNewlines))
             addLog("OTP submitted to the active VPN session.")
-            connectionState = .authenticating
+            if connectionState == .awaitingOTP {
+                connectionState = .authenticating
+            }
             isBusy = false
         } catch {
             connectionState = .error
@@ -213,6 +258,9 @@ final class VPNViewModel: ObservableObject {
 
     func addLog(_ message: String) {
         logs.append(VPNLogEntry(timestamp: Date(), message: message))
+        if logs.count > 1000 {
+            logs.removeFirst(logs.count - 1000)
+        }
     }
 
     private func bindServiceCallbacks() {

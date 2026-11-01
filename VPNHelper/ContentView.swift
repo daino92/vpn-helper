@@ -1,253 +1,266 @@
-//
-//  ContentView.swift
-//  VPNHelper
-//
-//  Created by Dionysis Kalepanagos on 15/3/26.
-//
-
 import SwiftUI
 import AppKit
 
 struct ContentView: View {
     @StateObject private var viewModel: VPNViewModel
     @State private var showVPNPassword = false
+    @AppStorage("showConnectionLogs") private var showLogs = false
+    @AppStorage("appearance") private var appearance: AppAppearance = .system
+    @State private var editLogin = false
+    @FocusState private var otpFocused: Bool
 
     init(viewModel: VPNViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            headerSection
-            credentialsSection
-            actionsSection
-            logSection
+        VStack(alignment: .leading, spacing: 22) {
+            header
+            Divider()
+            if !viewModel.rememberCredentials || editLogin {
+                credentials
+            } else {
+                HStack {
+                    Label(viewModel.fullEmail, systemImage: "person.crop.circle")
+                    Spacer()
+                    Button("Edit login") { editLogin = true }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(AppTheme.magenta)
+                }
+                .padding(14)
+                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            }
+            connectionControls
+            if let error = viewModel.errorMessage, !error.isEmpty {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(AppTheme.callout)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+            Divider()
+            diagnostics
         }
-        .padding(20)
-        .frame(minWidth: 760, minHeight: 680)
+        .font(AppTheme.body)
+        .tint(AppTheme.magenta)
+        .padding(28)
+        .frame(width: 460)
         .onAppear {
+            appearance.apply(to: NSApplication.shared)
             viewModel.onAppear()
         }
-    }
-}
-
-private extension ContentView {
-    var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("VPN Helper")
-                .font(.title2)
-                .bold()
-
-            HStack(spacing: 10) {
-                Button {
-                    Task {
-                        await viewModel.requestAdminAccess()
-                    }
-                } label: {
-                    Image(systemName: lockIconName)
-                        .foregroundStyle(lockColor)
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .disabled(viewModel.isBusy || viewModel.adminAccessState == .unlocked)
-
-                Text("Admin Access: \(viewModel.adminAccessState.rawValue.capitalized)")
-                    .font(.subheadline)
-
-                Spacer()
-            }
-
-            Text("Connection State: \(readableConnectionState)")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if let errorMessage = viewModel.errorMessage, !errorMessage.isEmpty {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
+        .onChange(of: appearance) { _, newAppearance in
+            newAppearance.apply(to: NSApplication.shared)
+        }
+        .onChange(of: viewModel.connectionState) { _, state in
+            otpFocused = state == .awaitingOTP
         }
     }
 
-    var credentialsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Credentials")
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Email")
-                    .font(.subheadline)
-
-                HStack(spacing: 8) {
-                    TextField("username", text: $viewModel.emailPrefix)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
-                        .onChange(of: viewModel.emailPrefix) { _, _ in
-                            viewModel.persistEmailIfNeeded()
-                        }
-
-                    Text(viewModel.emailDomain)
-                        .foregroundStyle(.secondary)
+    private var header: some View {
+        HStack(spacing: 16) {
+            Image(systemName: viewModel.connectionState == .connected ? "network.badge.shield.half.filled" : "shield.lefthalf.filled")
+                .font(.system(size: 30, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 60, height: 60)
+                .background(AppTheme.magenta, in: RoundedRectangle(cornerRadius: 16))
+            VStack(alignment: .leading, spacing: 5) {
+                Text("VPN Helper").font(AppTheme.title)
+                HStack(spacing: 6) {
+                    Circle().fill(statusColor).frame(width: 7, height: 7)
+                    Text(statusTitle).font(AppTheme.callout).foregroundStyle(.secondary)
                 }
             }
+            Spacer()
+            if viewModel.isBusy { ProgressView().controlSize(.small) }
+            appearanceMenu
+        }
+        .accessibilityElement(children: .contain)
+    }
 
-            Toggle("Remember email", isOn: Binding(
-                get: { viewModel.rememberEmailPrefix },
-                set: { viewModel.toggleRememberEmail($0) }
-            ))
+    private var appearanceMenu: some View {
+        Menu {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppAppearance.allCases) { option in
+                    Label(option.title, systemImage: option.symbolName)
+                        .tag(option)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: appearance.symbolName)
+                .font(.system(size: 15))
+                .frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Appearance: \(appearance.title)")
+        .accessibilityLabel("Appearance")
+        .accessibilityValue(appearance.title)
+    }
 
+    private var credentials: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Your account").font(AppTheme.headline)
             VStack(alignment: .leading, spacing: 6) {
-                Text("VPN Password")
-                    .font(.subheadline)
-
-                HStack(spacing: 6) {
+                Text("Work email").font(AppTheme.callout).foregroundStyle(.secondary)
+                HStack {
+                    TextField("Username", text: $viewModel.emailPrefix)
+                        .textContentType(.username)
+                    Text(viewModel.emailDomain).foregroundStyle(.secondary)
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("VPN password").font(AppTheme.callout).foregroundStyle(.secondary)
+                HStack {
                     Group {
                         if showVPNPassword {
-                            TextField("Enter VPN password", text: $viewModel.vpnPassword)
+                            TextField("Password", text: $viewModel.vpnPassword)
                         } else {
-                            SecureField("Enter VPN password", text: $viewModel.vpnPassword)
+                            SecureField("Password", text: $viewModel.vpnPassword)
                         }
                     }
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 260)
-
-                    Button {
-                        showVPNPassword.toggle()
-                    } label: {
+                    Button { showVPNPassword.toggle() } label: {
                         Image(systemName: showVPNPassword ? "eye.slash" : "eye")
-                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .help(showVPNPassword ? "Hide password" : "Show password")
+                    .accessibilityLabel(showVPNPassword ? "Hide password" : "Show password")
                 }
             }
+            Toggle("Save login in Keychain", isOn: Binding(
+                get: { viewModel.rememberCredentials },
+                set: { viewModel.setRememberCredentials($0) }
+            ))
+            Text("Your password stays in the macOS Keychain. A new OTP is required for each connection.")
+                .font(AppTheme.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .textFieldStyle(.roundedBorder)
+        .disabled(viewModel.isBusy || (viewModel.connectionState != .disconnected && viewModel.connectionState != .error))
+    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("OTP")
-                    .font(.subheadline)
-
-                TextField("123456", text: $viewModel.otp)
+    private var connectionControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if viewModel.connectionState == .awaitingOTP {
+                Text("Enter the code sent to your phone.").font(AppTheme.callout)
+                TextField("6-digit OTP", text: $viewModel.otp)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
-                    .multilineTextAlignment(.center)
-                    .frame(width: 78)
-                    .disabled(viewModel.connectionState != .awaitingOTP || viewModel.isBusy)
-                    .onChange(of: viewModel.otp) { _, _ in
-                        viewModel.sanitizeOTPInput()
-                    }
+                    .textContentType(.oneTimeCode)
+                    .focused($otpFocused)
+                    .onChange(of: viewModel.otp) { _, _ in viewModel.sanitizeOTPInput() }
+                    .onSubmit { performPrimaryAction() }
+            }
+            Button(action: performPrimaryAction) {
+                Text(primaryTitle).frame(maxWidth: .infinity).padding(.vertical, 5)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: 10))
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+            .disabled(!primaryEnabled)
+            if viewModel.connectionState == .awaitingOTP {
+                Button("Cancel") { Task { await viewModel.disconnect() } }
+                    .disabled(viewModel.isBusy)
+            }
+            if viewModel.connectionState == .disconnected {
+                Text("Connect, enter your OTP, and you’re ready.")
+                    .font(AppTheme.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    var actionsSection: some View {
-        HStack(spacing: 12) {
-            Button("Start VPN Login") {
-                Task {
-                    await viewModel.startLogin()
-                }
-            }
-            .disabled(!viewModel.canStartLogin)
-
-            Button("Submit OTP") {
-                Task {
-                    await viewModel.submitOTP()
-                }
-            }
-            .disabled(!viewModel.canSubmitOTP)
-
-            Button("Disconnect VPN") {
-                Task {
-                    await viewModel.disconnect()
-                }
-            }
-            .disabled(!viewModel.canDisconnect)
-
-            Button("Fix Network") {
-                Task {
-                    await viewModel.fixNetwork()
-                }
-            }
-            .disabled(!viewModel.canFixNetwork)
-
-            if viewModel.isBusy {
-                ProgressView()
-                    .controlSize(.small)
-                    .padding(.leading, 6)
-            }
-
-            Spacer()
-        }
-    }
-
-    var logSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var diagnostics: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Connection Log")
-                    .font(.headline)
-
-                Spacer()
-
-                Button("Copy Logs") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(formattedLogs, forType: .string)
+                Button { showLogs.toggle() } label: {
+                    Label("Connection log", systemImage: showLogs ? "chevron.down" : "chevron.right")
                 }
-                .disabled(viewModel.logs.isEmpty)
+                .buttonStyle(.plain)
+                Spacer()
+                Menu {
+                    Button("Copy logs") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(formattedLogs, forType: .string)
+                    }.disabled(viewModel.logs.isEmpty)
+                    Button("Clear logs") { viewModel.logs.removeAll() }
+                        .disabled(viewModel.logs.isEmpty)
+                    Divider()
+                    Button("Repair network") { Task { await viewModel.fixNetwork() } }
+                        .disabled(!viewModel.canFixNetwork)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Diagnostics")
             }
-
-            TextEditor(text: .constant(formattedLogs))
-                .font(.system(.body, design: .monospaced))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(8)
-                .background(Color.gray.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            .foregroundStyle(.secondary)
+            if showLogs {
+                ScrollView {
+                    Text(formattedLogs.isEmpty ? "No connection activity yet." : formattedLogs)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(height: 180)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+            }
         }
     }
 
-    var formattedLogs: String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .medium
-
-        return viewModel.logs
-            .map { entry in
-                "[\(formatter.string(from: entry.timestamp))] \(entry.message)"
-            }
-            .joined(separator: "\n")
+    private var primaryTitle: String {
+        if viewModel.connectionState == .awaitingOTP { return "Verify OTP" }
+        if viewModel.canDisconnect { return viewModel.connectionState == .connected ? "Disconnect" : "Cancel connection" }
+        if viewModel.isBusy { return "Connecting…" }
+        return "Connect"
     }
 
-    var readableConnectionState: String {
+    private var primaryEnabled: Bool {
+        if viewModel.connectionState == .awaitingOTP { return viewModel.canSubmitOTP }
+        return viewModel.canDisconnect || viewModel.canStartLogin
+    }
+
+    private func performPrimaryAction() {
+        Task {
+            if viewModel.connectionState == .awaitingOTP {
+                await viewModel.submitOTP()
+            } else if viewModel.canDisconnect {
+                await viewModel.disconnect()
+            } else if viewModel.canStartLogin {
+                editLogin = false
+                await viewModel.startLogin()
+            }
+        }
+    }
+
+    private var statusTitle: String {
         switch viewModel.connectionState {
-        case .disconnected: return "Disconnected"
-        case .authenticating: return "Authenticating"
-        case .awaitingOTP: return "Awaiting OTP"
-        case .authenticated: return "Authenticated"
-        case .connecting: return "Connecting"
-        case .connected: return "Connected"
-        case .disconnecting: return "Disconnecting"
-        case .error: return "Error"
+        case .disconnected: "Ready to connect"
+        case .authenticating: "Signing in…"
+        case .awaitingOTP: "Waiting for your OTP"
+        case .authenticated, .connecting: "Establishing secure connection…"
+        case .connected: "Connected"
+        case .disconnecting: "Disconnecting…"
+        case .error: "Connection needs attention"
         }
     }
 
-    var lockIconName: String {
-        switch viewModel.adminAccessState {
-        case .locked, .error:
-            return "lock.fill"
-        case .unlocking:
-            return "lock.rotation"
-        case .unlocked:
-            return "lock.open.fill"
+    private var statusColor: Color {
+        switch viewModel.connectionState {
+        case .connected: .green
+        case .error: .orange
+        case .disconnected: .secondary
+        default: AppTheme.magenta
         }
     }
 
-    var lockColor: Color {
-        switch viewModel.adminAccessState {
-        case .locked:
-            return .orange
-        case .unlocking:
-            return .blue
-        case .unlocked:
-            return .green
-        case .error:
-            return .red
-        }
+    private var formattedLogs: String {
+        viewModel.logs.map {
+            "[\($0.timestamp.formatted(date: .omitted, time: .standard))] \($0.message)"
+        }.joined(separator: "\n")
     }
 }
 
