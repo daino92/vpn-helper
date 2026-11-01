@@ -18,13 +18,6 @@ enum VPNConnectionState: String {
     case error
 }
 
-enum AdminAccessState: String {
-    case locked
-    case unlocking
-    case unlocked
-    case error
-}
-
 struct VPNLogEntry: Identifiable, Hashable {
     let id = UUID()
     let timestamp: Date

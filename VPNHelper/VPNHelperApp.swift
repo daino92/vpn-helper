@@ -12,7 +12,9 @@ import AppKit
 @MainActor
 enum VPNHelperEntryPoint {
     static func main() {
-        if CommandLine.arguments.contains("--sudo-askpass") {
+        if CommandLine.arguments.contains("--privileged-helper") {
+            PrivilegedDaemon.run()
+        } else if CommandLine.arguments.contains("--sudo-askpass") {
             NativeAdminPrompt.run()
         } else {
             VPNHelperApp.main()

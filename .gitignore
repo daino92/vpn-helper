@@ -13,3 +13,6 @@ xcuserdata/
 
 # Secrets (IMPORTANT)
 *.env
+
+# Code coverage
+*.profraw

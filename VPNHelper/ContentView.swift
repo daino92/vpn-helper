@@ -8,6 +8,7 @@ struct ContentView: View {
     @AppStorage("appearance") private var appearance: AppAppearance = .system
     @State private var editLogin = false
     @FocusState private var otpFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     init(viewModel: VPNViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -31,6 +32,13 @@ struct ContentView: View {
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
             }
             connectionControls
+            if viewModel.usesPrivilegedHelper {
+                Label("Touch ID or Mac password", systemImage: "touchid")
+                    .font(AppTheme.caption).foregroundStyle(.secondary)
+            } else if viewModel.helperInstallationState == .requiresApproval {
+                Text(viewModel.helperInstallationState.message)
+                    .font(AppTheme.caption).foregroundStyle(.secondary)
+            }
             if let error = viewModel.errorMessage, !error.isEmpty {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(AppTheme.callout)
@@ -47,6 +55,9 @@ struct ContentView: View {
         .onAppear {
             appearance.apply(to: NSApplication.shared)
             viewModel.onAppear()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { viewModel.refreshHelperState() }
         }
         .onChange(of: appearance) { _, newAppearance in
             newAppearance.apply(to: NSApplication.shared)
@@ -186,6 +197,11 @@ struct ContentView: View {
                     }.disabled(viewModel.logs.isEmpty)
                     Button("Clear logs") { viewModel.logs.removeAll() }
                         .disabled(viewModel.logs.isEmpty)
+                    Divider()
+                    Button("Set up Touch ID…") { Task { await viewModel.setUpTouchID() } }
+                        .disabled(viewModel.isBusy || (viewModel.connectionState != .disconnected && viewModel.connectionState != .error))
+                    Button("Use password authentication") { viewModel.usePasswordAuthentication() }
+                        .disabled(!viewModel.usesPrivilegedHelper || viewModel.isBusy || (viewModel.connectionState != .disconnected && viewModel.connectionState != .error))
                     Divider()
                     Button("Repair network") { Task { await viewModel.fixNetwork() } }
                         .disabled(!viewModel.canFixNetwork)

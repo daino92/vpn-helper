@@ -15,7 +15,10 @@ protocol VPNServiceProtocol: AnyObject {
     var onDisconnected: (() -> Void)? { get set }
     var onError: ((String) -> Void)? { get set }
 
-    func requestAdminAccess() async throws
+    var helperInstallationState: HelperInstallationState { get }
+    var usesPrivilegedHelper: Bool { get }
+    func setUpPrivilegedHelper() async throws
+    func usePasswordAuthentication()
     func startLogin(email: String, password: String) async throws
     func submitOTP(_ otp: String) async throws
     func startTunnel(using session: VPNAuthSession) async throws

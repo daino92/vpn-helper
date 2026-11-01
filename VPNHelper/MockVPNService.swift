@@ -15,9 +15,10 @@ final class MockVPNService: VPNServiceProtocol {
     var onDisconnected: (() -> Void)?
     var onError: ((String) -> Void)?
 
-    func requestAdminAccess() async throws {
-        try await Task.sleep(nanoseconds: 200_000_000)
-    }
+    var helperInstallationState: HelperInstallationState { .notInstalled }
+    var usesPrivilegedHelper: Bool { false }
+    func setUpPrivilegedHelper() async throws {}
+    func usePasswordAuthentication() {}
 
     func startLogin(email: String, password: String) async throws {
         onLog?("Preview mode start login for \(email)")

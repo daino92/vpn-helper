@@ -19,7 +19,8 @@ final class VPNViewModel: ObservableObject {
     @Published var otp: String = ""
 
     @Published var connectionState: VPNConnectionState = .disconnected
-    @Published var adminAccessState: AdminAccessState = .locked
+    @Published var helperInstallationState: HelperInstallationState = .notInstalled
+    @Published var usesPrivilegedHelper = false
     @Published var logs: [VPNLogEntry] = []
     @Published var isBusy: Bool = false
     @Published var errorMessage: String?
@@ -76,6 +77,7 @@ final class VPNViewModel: ObservableObject {
     func onAppear() {
         guard !didLoadCredentials else { return }
         didLoadCredentials = true
+        refreshHelperState()
         if rememberEmailPrefix { emailPrefix = savedEmailPrefix }
         do {
             if let credentials = try credentialStore.load() {
@@ -132,23 +134,28 @@ final class VPNViewModel: ObservableObject {
         }
     }
 
-    func requestAdminAccess() async {
-        errorMessage = nil
-        adminAccessState = .unlocking
+    func refreshHelperState() {
+        helperInstallationState = service.helperInstallationState
+        usesPrivilegedHelper = service.usesPrivilegedHelper
+    }
+
+    func setUpTouchID() async {
+        guard !isBusy, connectionState == .disconnected || connectionState == .error else { return }
         isBusy = true
-        addLog("Requesting administrator privileges from macOS...")
-
+        errorMessage = nil
         do {
-            try await service.requestAdminAccess()
-            adminAccessState = .unlocked
-            addLog("Admin access granted.")
+            try await service.setUpPrivilegedHelper()
         } catch {
-            adminAccessState = .error
             errorMessage = error.localizedDescription
-            addLog("Admin access failed: \(error.localizedDescription)")
         }
-
+        refreshHelperState()
         isBusy = false
+    }
+
+    func usePasswordAuthentication() {
+        guard !isBusy, connectionState == .disconnected || connectionState == .error else { return }
+        service.usePasswordAuthentication()
+        refreshHelperState()
     }
 
     func startLogin() async {

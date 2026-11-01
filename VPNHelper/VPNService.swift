@@ -17,7 +17,6 @@ final class VPNService: VPNServiceProtocol {
     var onError: ((String) -> Void)?
 
     private let sudoPath = "/usr/bin/sudo"
-    private let osascriptPath = "/usr/bin/osascript"
     private let pgrepPath = "/usr/bin/pgrep"
     private let openconnectPath = "/opt/homebrew/bin/openconnect"
     private let vpnSlicePath = "/opt/homebrew/bin/vpn-slice"
@@ -48,37 +47,46 @@ final class VPNService: VPNServiceProtocol {
 
     private var disconnectContinuation: CheckedContinuation<Void, Error>?
 
-    func requestAdminAccess() async throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: osascriptPath)
-        process.arguments = [
-            "-e",
-            #"do shell script "/usr/bin/true" with administrator privileges"#
-        ]
+    private let helper = PrivilegedHelperClient()
+    private var usingHelperTunnel = false
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+    var helperInstallationState: HelperInstallationState { helper.installationState }
+    var usesPrivilegedHelper: Bool { helper.isPreferred }
 
-        let result = try await runProcessAndCaptureOutput(process, pipe: pipe)
+    func setUpPrivilegedHelper() async throws {
+        try await helper.install()
+    }
 
-        if result.status != 0 {
-            let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+    func usePasswordAuthentication() {
+        helper.usePassword()
+    }
 
-            throw NSError(
-                domain: "VPNService",
-                code: 900,
-                userInfo: [
-                    NSLocalizedDescriptionKey: output.isEmpty
-                        ? "Administrator access was not granted."
-                        : output
-                ]
-            )
+    init() {
+        helper.onOutput = { [weak self] data in
+            self?.queue.async {
+                guard self?.usingHelperTunnel == true else { return }
+                self?.handleIncomingText(String(decoding: data, as: UTF8.self))
+            }
+        }
+        helper.onExit = { [weak self] status in
+            self?.queue.async {
+                guard let self, self.usingHelperTunnel else { return }
+                self.usingHelperTunnel = false
+                self.handleProcessTermination(status: status)
+            }
+        }
+        helper.onFailure = { [weak self] message in
+            self?.queue.async {
+                guard let self, self.usingHelperTunnel else { return }
+                self.usingHelperTunnel = false
+                self.cleanupSession()
+                self.emitError(message)
+            }
         }
     }
 
     func startLogin(email: String, password: String) async throws {
-        guard process == nil else {
+        guard process == nil, !usingHelperTunnel else {
             throw NSError(
                 domain: "VPNService",
                 code: 100,
@@ -185,6 +193,24 @@ final class VPNService: VPNServiceProtocol {
             )
         }
 
+        if helper.isPreferred {
+            guard !usingHelperTunnel else {
+                throw HelperFailure(message: "A privileged VPN tunnel is already running.")
+            }
+            resetSessionState()
+            sessionMode = .tunnel
+            usingHelperTunnel = true
+            do {
+                try await helper.startTunnel(using: session)
+                emitLog("Started VPN tunnel through the privileged helper.")
+                return
+            } catch {
+                usingHelperTunnel = false
+                sessionMode = nil
+                throw error
+            }
+        }
+
         guard FileManager.default.fileExists(atPath: sudoPath) else {
             throw NSError(
                 domain: "VPNService",
@@ -288,6 +314,16 @@ final class VPNService: VPNServiceProtocol {
     }
 
     func disconnect() async throws {
+        if usingHelperTunnel {
+            disconnectRequested = true
+            do {
+                try await helper.stopTunnel()
+            } catch {
+                disconnectRequested = false
+                throw error
+            }
+            return
+        }
         if sessionMode == .authenticating, let process {
             disconnectRequested = true
             process.terminate()
@@ -385,6 +421,9 @@ final class VPNService: VPNServiceProtocol {
     }
 
     func fixNetwork() async throws -> [String] {
+        if helper.isPreferred {
+            return try await helper.repairNetwork()
+        }
         try await ensureAskpassScript()
 
         let commands: [[String]] = [
