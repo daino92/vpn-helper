@@ -124,8 +124,7 @@ final class VPNViewModel: ObservableObject {
     }
 
     func sanitizeOTPInput() {
-        let digitsOnly = otp.filter { $0.isASCII && $0.isNumber }
-        let limited = String(digitsOnly.prefix(6))
+        let limited = OTPInput.sanitize(otp)
 
         if otp != limited {
             otp = limited
