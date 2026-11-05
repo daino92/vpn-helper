@@ -19,8 +19,8 @@ final class VPNService: VPNServiceProtocol {
     private let sudoPath = "/usr/bin/sudo"
     private let osascriptPath = "/usr/bin/osascript"
     private let pgrepPath = "/usr/bin/pgrep"
-    private let openconnectPath = "/opt/homebrew/bin/openconnect"
-    private let vpnSlicePath = "/opt/homebrew/bin/vpn-slice"
+    private let runtimeResolver: VPNRuntimeResolver
+    private var selectedRuntime: VPNRuntime?
     private let askpassScriptPath = FileManager.default.temporaryDirectory
         .appendingPathComponent("vpnhelper-askpass-\(UUID().uuidString).sh").path
     private let pidFilePath = "/tmp/vpnhelper-openconnect.pid"
@@ -47,6 +47,10 @@ final class VPNService: VPNServiceProtocol {
     private var tunnelPID: Int32?
 
     private var disconnectContinuation: CheckedContinuation<Void, Error>?
+
+    init(runtimeResolver: VPNRuntimeResolver? = nil) {
+        self.runtimeResolver = runtimeResolver ?? VPNRuntimeResolver()
+    }
 
     func requestAdminAccess() async throws {
         let process = Process()
@@ -86,13 +90,10 @@ final class VPNService: VPNServiceProtocol {
             )
         }
 
-        guard FileManager.default.fileExists(atPath: openconnectPath) else {
-            throw NSError(
-                domain: "VPNService",
-                code: 404,
-                userInfo: [NSLocalizedDescriptionKey: "openconnect was not found at \(openconnectPath)"]
-            )
-        }
+        let runtime = try runtimeResolver.resolve()
+        selectedRuntime = runtime
+        let openconnectPath = runtime.openconnect.path
+        emitLog(runtime.logDescription)
 
         resetSessionState()
         savedPassword = password
@@ -102,7 +103,7 @@ final class VPNService: VPNServiceProtocol {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: openconnectPath)
-        process.arguments = [
+        process.arguments = runtime.certificateArguments + [
             "--authenticate",
             "--protocol=fortinet",
             "--resolve", "vpnaccess.ote.gr:195.167.99.229",
@@ -110,7 +111,7 @@ final class VPNService: VPNServiceProtocol {
             "-u", email
         ]
 
-        var env = ProcessInfo.processInfo.environment
+        var env = runtime.environment(from: ProcessInfo.processInfo.environment)
         env["TERM"] = "xterm-256color"
         process.environment = env
 
@@ -185,6 +186,10 @@ final class VPNService: VPNServiceProtocol {
             )
         }
 
+        let runtime = try selectedRuntime ?? runtimeResolver.resolve()
+        let openconnectPath = runtime.openconnect.path
+        let vpnSlicePath = runtime.vpnSlice.path
+
         guard FileManager.default.fileExists(atPath: sudoPath) else {
             throw NSError(
                 domain: "VPNService",
@@ -214,15 +219,12 @@ final class VPNService: VPNServiceProtocol {
         resetSessionState()
         sessionMode = .tunnel
 
-        let scriptCommand = [
-            vpnSlicePath,
-            "--domains-vpn-dns=ote.gr,cosmote.gr,azure.com",
-            "10.0.0.0/8"
-        ].joined(separator: " ")
+        let scriptCommand = runtime.splitTunnelScript
 
         var args: [String] = [
             "-A",
-            openconnectPath,
+            openconnectPath
+        ] + runtime.certificateArguments + [
             "--protocol=fortinet",
             "--cookie-on-stdin",
             "--script", scriptCommand,
@@ -244,7 +246,7 @@ final class VPNService: VPNServiceProtocol {
         process.executableURL = URL(fileURLWithPath: sudoPath)
         process.arguments = args
 
-        var env = ProcessInfo.processInfo.environment
+        var env = runtime.environment(from: ProcessInfo.processInfo.environment)
         env["TERM"] = "xterm-256color"
         env["SUDO_ASKPASS"] = askpassScriptPath
         process.environment = env
