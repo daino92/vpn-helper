@@ -74,6 +74,15 @@ struct VPNHelperTests {
         #expect(model.connectionState == .connected || model.connectionState == .connecting || model.connectionState == .authenticated)
     }
 
+    @Test func pastedOTPAllowsSeparatorsAndLimitsLength() {
+        #expect(OTPInput.sanitize("123456") == "123456")
+        #expect(OTPInput.sanitize("12 34-56\n") == "123456")
+        #expect(OTPInput.sanitize("123456789") == "123456")
+        #expect(OTPInput.sanitize("１２٣abc") == "")
+        #expect(OTPInput.sanitize("12345") == "12345")
+        #expect(OTPInput.sanitize("") == "")
+    }
+
     @Test func invalidOTPIsFilteredAndCannotBeSubmitted() {
         let model = VPNViewModel(service: MockVPNService(), credentialStore: MemoryCredentialStore(), userDefaults: isolatedDefaults())
         model.connectionState = .awaitingOTP

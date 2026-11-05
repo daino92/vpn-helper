@@ -7,7 +7,6 @@ struct ContentView: View {
     @AppStorage("showConnectionLogs") private var showLogs = false
     @AppStorage("appearance") private var appearance: AppAppearance = .system
     @State private var editLogin = false
-    @FocusState private var otpFocused: Bool
 
     init(viewModel: VPNViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -50,9 +49,6 @@ struct ContentView: View {
         }
         .onChange(of: appearance) { _, newAppearance in
             newAppearance.apply(to: NSApplication.shared)
-        }
-        .onChange(of: viewModel.connectionState) { _, state in
-            otpFocused = state == .awaitingOTP
         }
     }
 
@@ -144,13 +140,8 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             if viewModel.connectionState == .awaitingOTP {
                 Text("Enter the code sent to your phone.").font(AppTheme.callout)
-                TextField("6-digit OTP", text: $viewModel.otp)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .textContentType(.oneTimeCode)
-                    .focused($otpFocused)
-                    .onChange(of: viewModel.otp) { _, _ in viewModel.sanitizeOTPInput() }
-                    .onSubmit { performPrimaryAction() }
+                OTPCodeField(code: $viewModel.otp, onSubmit: performPrimaryAction)
+                    .disabled(viewModel.isBusy)
             }
             Button(action: performPrimaryAction) {
                 Text(primaryTitle).frame(maxWidth: .infinity).padding(.vertical, 5)
