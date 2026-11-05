@@ -1,0 +1,10 @@
+# Build-only environment. Install into a dedicated venv, never system Python.
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+altgraph==0.17.5
+macholib==1.16.4
+packaging==26.3
+setuptools==84.2.1
+vpn-slice==0.16.1
+dnspython==2.8.0
+setproctitle==1.3.7
